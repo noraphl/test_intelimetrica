@@ -1,0 +1,12 @@
+name: test2_diamonds
+title: test2_diamonds
+username:
+account: noraphl
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2749564
+bundleId: 3589739
+url: https://noraphl.shinyapps.io/test2_diamonds/
+when: 1599156477.53544
+asMultiple: FALSE
+asStatic: FALSE

@@ -1,0 +1,12 @@
+name: test_ufosummary
+title: test_ufosummary
+username:
+account: noraphl
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2746612
+bundleId: 3587435
+url: https://noraphl.shinyapps.io/test_ufosummary/
+when: 1599117038.29788
+asMultiple: FALSE
+asStatic: FALSE

@@ -1,0 +1,335 @@
+---
+title: "The X-files problem"
+author: "Nora Hernandez"
+date: "9/2/2020"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document presents the procedure and findings for "The X-files problem" as part of the IM-Analytics Qualification Test.
+
+## The problem
+
+We are given data collected by _Infinito_ containing information about UFO sightings around the world. The data set contains information about the date and time of the sighting, as well as location and duration of the event. 
+
+We are looking for information that leads to answer the question: **where should one go if one wants to see an U.F.O. or interview people that claim sightings?**
+
+The following sections detail how to get relevant information to solve the main question.
+
+## Loading and preparing data
+
+Let's load the data and have a look:
+
+```{r}
+ufo_raw <- read.csv("ufo_sightings/UFO_sightings.csv", na.strings = "")
+head(ufo_raw,n = 10)
+```
+
+It is important to verify the number of rows and columns, and also the type of each of the columns (these will be our variables):
+
+```{r}
+#get number of rows and columns
+dim(ufo_raw)
+
+#get class of every column vector
+sapply(ufo_raw, class)
+```
+
+We can see a general summary:
+
+```{r}
+summary(ufo_raw)
+```
+
+Nonetheless, before we can see any relevant summary information of the data, it is necessary some pre-processing.
+
+From the above information, we can see that there are some missing data (in state, country), as well as some columns must be transformed to an appropriate class (dates and latitude). 
+
+We can identify the total number of incomplete entries in the data set:
+
+```{r}
+#incomplete entries
+nrow(ufo_raw)-sum(complete.cases(ufo_raw))
+
+#identify number of missing states
+sum(is.na(as.factor(ufo_raw$state)))
+
+#identify number of missing countries
+sum(is.na(as.factor(ufo_raw$country)))
+
+#identify missing latitudes
+sum(is.na(as.numeric(ufo_raw$latitude)))
+
+```
+
+The latitude vector has only one missing value:
+
+```{r}
+ufo_raw[is.na(as.numeric(ufo_raw$latitude)),]
+```
+
+It seems quite easy to solve as it seems only as a typo. Let's check the latitude and longitude to see if they match the country and state. We can use the data from the 'rworldmap' package, and construct a simple function to retrieve the necessary information:
+
+```{r}
+library(sp)
+library(rworldmap, quietly = T)
+coords2country <- function(lnglat)
+{  
+        all.countries.SP <- getMap(resolution='low')
+        lnglat.SP <- SpatialPoints(lnglat,
+                                 proj4string=CRS(proj4string(all.countries.SP))) 
+        countries <- over(lnglat.SP, all.countries.SP)
+        data.frame(short = countries$ISO_A2, # returns the ISOA2 code
+                   long = countries$ADMIN # returns long name
+                   )
+         
+}
+lnglat <- data.frame(lng = -105.6242,lat = 33.200088)
+coords2country(lnglat)
+```
+
+Since we can only retrieve country information, but the entry is missing that information, we can make a quick search to find out:
+
+```{r}
+library(tidyverse, quietly = T)
+library(httr, quietly = T)
+library(jsonlite, quietly = T)
+path <- "https://nominatim.openstreetmap.org/reverse?format=xml&lat=33.200088&lon=-105.6242&zoom=18&addressdetails=1"
+request <- GET(path)
+response <- content(request, as = "text", encoding = "UTF-8")
+#df <- fromJSON(content = response, flatten = TRUE) %>% 
+#        data.frame()
+
+
+```
+
+As expected, the location coordinates match the input in the other fields (state, city), so it is advisable to change the latitude and convert the column to numeric:
+
+```{r}
+latitude <- suppressMessages(as.numeric(ufo_raw$latitude))
+latitude[is.na(latitude)] <- 33.200088
+
+#verify
+sum(is.na(latitude))
+```
+
+Let's modify the dates and give the vectors appropriate class and format:
+
+```{r}
+#date and time of sighting
+datetime <- strptime(ufo_raw$datetime, "%m/%d/%Y %H:%M")
+
+#check completeness
+sum(is.na(datetime))
+
+#date of post
+date.posted <- strptime(ufo_raw$date.posted, "%m/%d/%Y")
+
+#check completeness
+sum(is.na(date.posted))
+```
+
+
+Before we used a dummy time zone regardless of the location. Now let's update to obtain the correct time of sighting and correct the messy values:
+
+```{r}
+timezones <- lutz::tz_lookup_coords(latitude, ufo_raw$longitude, method = "accurate", warn = F)
+
+#get correct time with time zones
+new_datetime <- lubridate::with_tz(datetime, timezones)
+
+#check missing values
+new_datetime[is.na(new_datetime)] <- lubridate::with_tz(strptime(
+                                                      ufo_raw$datetime[is.na(datetime)],
+                                                      format = "%m/%d/%Y %H:%M", 
+                                                      tz = "Etc/GMT+6"), timezones)
+sum(is.na(new_datetime))
+head(new_datetime)
+```
+
+Now, complete the missing countries from the coordinate location:
+
+```{r}
+country <- coords2country(data.frame(ufo_raw$longitude, latitude))
+head(country, 10)
+
+#check completeness
+sum(is.na(country$short))
+
+```
+Some locations are still unidentifiable.
+
+Let's combine raw and new country data
+
+```{r}
+country.raw <- as.factor(toupper(ufo_raw$country))
+country[is.na(country$short), 1] <- country.raw[is.na(country$short)]
+head(country, 10)
+
+#check completeness
+sum(is.na(country$short))
+```
+
+Let's check the shape of the UFOs as described by the community:
+
+```{r}
+summary(as.factor(ufo_raw$shape))
+```
+
+we can group several of these to create more representative categories:
+
+```{r}
+shape <- as.factor(ufo_raw$shape)
+levels(shape) <- c("changing", "changing", "triangular", "flat", "circular", "triangular", "other", "cross", "cilinder", "triangular", "diamond", "circular", "other", "oval", "fireball", "light", "light", "formation", "other", "light", "other", "oval", "triangular", "rectangle", "circular", "circular", "oval", "triangular", "unidentified")
+shape <- forcats::fct_explicit_na(shape, "unidentified")
+table(shape)
+```
+
+Let's check the duration of the sighting:
+
+```{r}
+seconds <- as.numeric(ufo_raw$duration..seconds.)
+
+#check completeness
+sum(is.na(seconds))
+
+#go back to original data
+ufo_raw[is.na(seconds), 6]
+
+#fill missing data
+seconds[is.na(seconds)] <- c(2, 8, 0.5)*60
+
+#verify
+sum(is.na(seconds))
+```
+
+Now we have cleaned the data set, and we can use it in our analysis. Also, the comments can be dismissed for the numerical analysis, so the relevant data frame will be constructed by date of sighting, location (state, country, lat, lng), shape, and duration:
+
+```{r}
+ufo.data <<- data.frame(datetime = new_datetime, 
+                       shape = shape,
+                       duration = seconds,
+                       state = as.factor(toupper(ufo_raw$state)), 
+                       country = country$short,
+                       lng = ufo_raw$longitude,
+                       lat = latitude,
+                       date.posted = date.posted) 
+head(ufo.data, 10)
+sum(complete.cases(ufo.data))
+nrow(ufo.data)
+```
+
+
+## Descriptive analysis
+
+Now we can have a better look at the data. A brief summary:
+
+```{r}
+summary(ufo.data)
+```
+
+Let's have a close look at the number of sightings by country, shape, month of the year, decade, or recent sightings.
+
+
+```{r app_summary, echo=F}
+#shinyAppFile("ufo_summary1.R",
+#             options = list(
+#    width = "100%", height = 550)
+knitr::include_url("https://noraphl.shinyapps.io/test_ufosummary/", height = 550)
+
+```
+
+If the app is not showing, please review it [here](https://noraphl.shinyapps.io/test_ufosummary/)
+
+From the information above, we can identify the following:
+* Besides the US being the most represented country in the data set, more than 95% of the information comes from English speaking countries
+* The positive skewness of the data in the sightings by decade can be due to the rise of the Internet era (web 2.0) in the beginning of the century. 
+* It is less likely that a user will introduce data of a sighting that happened a long time ago. This has reflected in the recent reports of sightings, reaching its peak in 2012.
+* The most common months for sightings are in the summer. This can be related to the fact that during the summer time, people like to go on outdoor activities, and this also increases the time spent looking at the sky.
+* The most common shapes are circular and light-like. Considering that the human eye has certain limits, it is possible to argue that objects tend to lose definite shape with distance, and some objects can be misidentified.
+
+
+## Solving the mystery
+
+Now that we have a better idea of the information that can be obtained from the data, we can answer more interesting questions. 
+
+First of all, given the massive amount of sightings reported in the US, the most safe observation is that the data is biased given the origin of the data set. More people in the US know how to report a sighting, therefore more entries from this country. 
+
+We can test if the number of sightings by country are evenly distributed by using a chi-squared test. 
+
+```{r}
+#prepare data for test
+test.country <- ufo.data[complete.cases(ufo.data),] %>% 
+  group_by(country) %>%
+  summarise(freq = n()) %>%
+  filter(country != "+99") %>%
+  arrange(desc(freq))
+test.country
+
+#test hypothesis
+chisq.test(test.country$freq)
+```
+
+As expected, given p<<0.01 we can conclude that the sightings are not evenly distributed across the world. 
+
+Now we can be more curious and pose questions exclusively to the probability of observing UFOs in the US. Similar to what we did for the distribution of sightings over the world, we can test the assumption that all states in the US have the same probability of sightings.
+
+```{r}
+#obtain number of sightings per state in the US
+state.US <- ufo.data[complete.cases(ufo.data),] %>%
+  filter(country == "US") %>%
+  group_by(state) %>%
+  summarise(freq = n()) %>%
+  arrange(desc(freq))
+state.US
+
+#some entries are not actually states of the US
+states <<- c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY") %>% factor
+state.US <- state.US[na.omit(match(state.US$state, states)),] %>%
+  arrange(desc(freq)) %>%
+  mutate(prop = prop.table(freq)*100,
+         cumulative = cumsum(prop)) 
+
+#have a look at the data
+head(state.US) #more popular states by num of sightings
+tail(state.US) #less popular
+
+#test hypothesis
+  chisq.test(state.US$freq)
+```
+Again, we can reject the hypothesis that sightings are equally common along the 50 states of the US, given p<<0.01. 
+
+Before giving the final verdict, we can explore some other questions like: what is the most common shape one can expect to observe in every state in the US?
+
+```{r}
+shapeXstate <- ufo.data %>% 
+  filter(country == "US") %>%
+  group_by(state, shape) %>%
+  summarise(freq = n()) %>%
+  arrange(desc(freq)) %>%
+  reshape2::dcast(formula = state ~ shape) 
+shapeXstate <- shapeXstate[na.omit(match(states, shapeXstate$state)),]
+shapeXstate
+```
+
+### The final answer 
+
+Based on the analysis made here, it is advisable to go to the United States of America, and visit states CA, WA, FL, TX, NY, AZ, IL, PA, OH, MI, to have at least 50% chance of seeing an UFO. 
+
+The best time of year to visit would be in the summer, preferably during June, July or August, but the last semester of the year is also convenient.
+
+The shape of the UFO that can be expected regardless of the specific location is circular or light-like, but more specific information can be found above.
+
+
+
+
+## Comments and future work
+
+It is possible to use an API to retrieve exact information of the location and have more granularity in the analysis, i.e. by city or state, but retrieving this information is time consuming (Nominatim), or costly (Geocoding with Google Maps).
+
+It would be possible to create a predictive model to obtain the probable location of the next sighting.
+

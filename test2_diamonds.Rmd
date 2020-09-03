@@ -1,0 +1,352 @@
+---
+title: "The lapidarist problem"
+author: "Nora Hernandez"
+date: "9/2/2020"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document presents the procedure and findings for "The lapidarist problem" as part of the IM-Analytics Qualification Test.
+
+## The problem
+
+We are given the task for finding the value (i.e. price) of some missing diamonds, based on a data set containing the most important characteristics to value a diamond. 
+
+The missing diamonds have the follwing characteristics:
+
+```{r}
+library(dplyr)
+missing_diamonds <- read.csv("diamonds/missing.csv", header = T)
+missing_diamonds <- missing_diamonds[,-1] %>%
+  mutate(cut = as.factor(cut),
+         color = as.factor(color),
+         clarity = as.factor(clarity))
+missing_diamonds
+```
+
+## Loading and preparing data
+
+First, we need to load the data to identify the main characteristics of the set:
+
+```{r}
+diamond_raw <- read.csv("diamonds/diamonds_data.csv")
+
+#chack dimensions
+dim(diamond_raw)
+
+#check some rows
+head(diamond_raw)
+
+#check completeness
+nrow(diamond_raw) - sum(complete.cases(diamond_raw)) 
+
+```
+
+Now we have seen the data, we can compute simple summary statistics to understand better the variables:
+
+```{r}
+summary(diamond_raw)
+```
+
+We can see that there are 3 variables with categorical value. First, we need to give them appropriate levels:
+
+```{r}
+diamonds <- diamond_raw
+
+#modify type of data
+diamonds$cut <- factor(diamonds$cut)
+diamonds$color <- as.factor(diamonds$color)
+diamonds$clarity <- as.factor(diamonds$clarity)
+```
+
+With categorical values there are few options: either they are left as they are and we work only with those prediction algorithms that can handle such variables, or we can transform them into relevant numerical variables. 
+
+## Descriptive analysis
+
+We are going to try to identify if there is any relationship between the categorical values in our data set and one of the most obvious reference units: price per carat. First, let's check the relationship between the two:
+
+```{r}
+suppressMessages(library(tidyverse, verbose = F, quietly = T))
+
+diamonds %>% ggplot((aes(x = carat, y = price)))+
+  geom_point(fill = I('#F79420'),color = I('red'),shape= 21)+
+  stat_smooth(method = lm)+
+  xlim(0,quantile(diamonds$carat,.99))+
+  ylim(0,quantile(diamonds$price,.99))
+```
+
+We can see there is no clear definitive pattern, but the trend is at least somewhat relevant. While the relationship is not linear (perhaps exponential), and the variance in price increases as carat increases, we can imagine there is at least a significant (>0.5) positive correlation between the two variables.
+
+We can verify these relationship with the price adjusted to log10:
+
+```{r}
+diamonds %>% ggplot((aes(y = carat, x = log10(price))))+
+  geom_point(fill = I('#F79420'),color = I('red'),shape= 21)+
+        stat_smooth(method = lm)
+```
+
+We can se now a more stable trend, though the variance is still high as the price increases. 
+
+The trends visible between price and carat will serve as helper to identify any trend between the categorical variables and price. Let's check for 'clarity':
+
+```{r}
+diamonds %>% ggplot(aes(x = carat, y = price)) + 
+  geom_point(aes(color= clarity), alpha = 0.5, size = 1, position = 'jitter') +
+  scale_color_brewer(type = 'div',
+                     guide = guide_legend(title = 'Clarity', reverse = T,
+                                          override.aes = list(alpha = 1, size = 2))) +  
+  scale_x_continuous(limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  stat_smooth(formula = y ~ poly(x, 3)) + #adjust to cubic polynom
+  ggtitle('Price (log10) by Carat and Clarity')
+```
+
+It is possible to see a pattern, maybe we can adjust by the cubic root of price. This will allow to map more precisely the categorical variables relative to the price.
+
+```{r}
+#create function to transform carat 
+cubrttrans = function() scales::trans_new('cubrt', 
+                                      transform = function(x) x^(1/3),
+                                      inverse = function(x) x^3)
+
+#plot data with transformed axis
+
+diamonds %>% ggplot(aes(x = carat, y = price)) + 
+  geom_point(aes(color= clarity), alpha = 0.5, size = 1, position = 'jitter') +
+  scale_color_brewer(type = 'div',
+                     guide = guide_legend(title = 'Clarity', reverse = T,
+                                          override.aes = list(alpha = 1, size = 2))) +  
+  scale_x_continuous(trans = cubrttrans(), limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  stat_smooth(method = "lm") +
+  ggtitle('Price (log10) by Carat and Clarity') 
+```
+
+Similarly, we can adjust carat to verify the relation between color and price:
+
+```{r}
+diamonds %>% ggplot(aes(x = carat, y = price)) + 
+  geom_point(aes(color = color), alpha = 0.5, size = 1, position = 'jitter') +
+  scale_color_brewer(type = 'div',
+                     guide = guide_legend(title = 'Color', reverse = T,
+                                          override.aes = list(alpha = 1, size = 2))) +  
+  scale_x_continuous(trans = cubrttrans(), limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  stat_smooth(method = "lm") +
+  ggtitle('Price (log10) by Carat and Color')
+```
+
+Finally, we do the same for 'cut':
+
+```{r}
+diamonds %>% ggplot(aes(x = carat, y = price)) + 
+  geom_point(aes(color = cut), alpha = 0.5, size = 1, position = 'jitter') +
+  scale_color_brewer(type = 'div',
+                     guide = guide_legend(title = 'Cut', reverse = T,
+                                          override.aes = list(alpha = 1, size = 2))) +  
+  scale_x_continuous(trans = cubrttrans(), limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  stat_smooth(method = "lm") +
+  ggtitle('Price (log10) by Carat and Cut')
+```
+
+We can see that all categorical values are related to the main predictor in the data set (carat). `
+
+#### Correlation analysis
+
+It is also possible to analyze the relation among the variables in the data set using Pearson's correlation. 
+
+```{r}
+num_diam <- sapply(diamonds, as.numeric)
+cor(num_diam)
+```
+
+We can see a strong correlation between price and carat, as expected, but very low values for the categorical variables and depth. However, we will not remove these variables, since we've seen that the relation is linear to log10(price) and cubrt(carat). Instead, we can aggregate features that are more meaningful, and check how well they help in the prediction.
+
+```{r}
+num_diam <- num_diam %>%
+        as.data.frame %>%
+        mutate(cut_ct = cut*log10(price)/sqrt(carat),
+               color_ct = color*log10(price)/sqrt(carat),
+               clarity_ct = clarity*log10(price)/sqrt(carat)) %>%
+        select(-c(cut, color, clarity, depth))
+head(num_diam)
+```
+
+Now, let's check again the correlation:
+
+```{r}
+cor(num_diam)
+```
+
+We can see a more clear and strong relationship among the augmented variables in the data set. Yet, these must be carefully treated as they are linear combination of other variables, and they can introduce noise or be not meaningful at all.
+
+## Predictive modeling
+
+#### Linear Model
+
+Now we can propose a model that fits the data, and can predict the price based on the selected variables. For a test attempt, we can use linear regression. Despite being a simple model, it is clear that the relationship between price and carat follows an clear trend, and with the augmented data set, these characteristic is enhanced. Therefore, we can test how well this model fits the data, and use it as predictor for solving the problem. First we aggregate the new augmented variables to the data set.
+
+```{r}
+#include augmented vars
+lm_diam <- diamonds
+lm_diam[,11:13] <- num_diam[,7:9]
+head(diamonds)
+```
+
+Now we prepare the train-test partition. We will train different two models containing original and augmented variables. With this we will be able to identify the best model according to different predictors:
+
+```{r}
+#create train - test partition
+set.seed(2020)
+train_size <- 0.8
+train <- sample(seq(nrow(diamonds)), floor(nrow(diamonds)*train_size), replace = F)
+
+#train models
+m1 <- lm(I(log10(price)) ~ I(carat^(1/3)) + carat + cut + color + clarity, data = lm_diam[train,])
+m2 <- update(m1, ~ . + cut_ct + color_ct + clarity_ct)
+
+```
+
+Let's analyze the models:
+
+```{r}
+#calculate train error
+lm_models <- list(M1 = m1, M2 = m2)
+
+RSS <- function(x) c(crossprod(x)) #residuals sum of squares
+MSE <- function(x) RSS(x) / length(x) #mean squared error
+RMSE <- function(x) sqrt(MSE(x)) #root mean square error
+
+lm_mse <- sapply(lm_models, function(x) MSE = MSE(x$residuals))
+lm_rmse <- sapply(lm_models, function(x) RMSE(x$residuals))
+lm_r2 <- sapply(lm_models, function(x) summary(x)$r.squared)
+
+#error rates for the train set
+data.frame(MSE = sapply(lm_models, function(x) MSE = MSE(x$residuals)),
+                         RMSE =  sapply(lm_models, function(x) RMSE(x$residuals)),
+                         R2 = sapply(lm_models, function(x) summary(x)$r.squared),
+                         Coeff = sapply(lm_models, function(x) nrow(summary(x)$coefficients)))
+
+```
+The error rates are very low for all models, and the difference between the two is very low. The similar behavior of the second model confirms the intuition that the aggregated variables do not add much information that helps classification.
+
+The low values of the error rates are an indicator of over-fitting. The model might be well adjusted for the train set, and might not have the sufficient generalization capabilities to predict the value of unseen objects. We can verify this in the test set:
+
+
+```{r}
+all_pred <- sapply(lm_models, predict, newdata = lm_diam[-train,]) #predictions
+res <- all_pred-diamonds$price[-train] #residuals
+
+head(all_pred)
+head(res)
+```
+With a look at the predictions and the residuals, it is not even necessary to calculate the error rates to identify the problem. It is clear that the linear model is not a good choice for predicting the value of the diamonds, regardless of the intuitive good fit if showed from the exploratory analysis. 
+
+#### Random Forest
+
+We will try to create another model for the prediction of the price. This time, we will train a random forest. One of the advantages of the decision trees is the selection of the "best" variable at each partition/branch.
+
+```{r}
+#use the same train-test data partition
+rf <- randomForest::randomForest(x = diamonds[train,], y = diamonds$price[train], maxnodes = 100, ntree = 1000)
+
+rf
+
+#RMSE
+RMSE(diamonds$price[train] - rf$predicted)
+
+#R2
+caret::postResample(rf$predicted, diamonds$price[train])['Rsquared']
+```
+Let's have a look at the predicted values compared with the real value:
+
+```{r}
+diamonds[train,] %>%
+  dplyr::select(c(carat, price)) %>%
+  mutate(pred = rf$predicted,
+         res = price-pred) %>%
+  ggplot(aes(x = carat)) +
+  geom_point(aes(y = price), color = "blue", alpha = 0.5 ) +
+  geom_point(aes(y = pred), color = "red", alpha = 0.5) +
+  scale_x_continuous(trans = cubrttrans(), limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  scale_color_manual(labels = c("Price", "Pred"), values = c("blue", "red"))
+```
+
+Despite having high error rates, the model has a relative good fit of the data. Along the relative match of the data in the graph, we can interpret the value of R2 as the _goodness_ of fit of the model. It reflects how much of the variance of the data is explained by the model.
+
+Now let's complete the test of the model, and check the results:
+```{r}
+#predict price in the test set
+rf_pred <- predict(rf, diamonds[-train,])
+
+#obtain error rates
+rf_df <- diamonds[-train,] %>%
+  dplyr::select(c(carat, price)) %>%
+  mutate(pred = rf_pred,
+         res = price-pred)
+head(rf_df)
+
+#RMSE
+RMSE(rf_df$res)
+
+#R2
+caret::postResample(rf_df$pred, rf_df$price)['Rsquared']
+
+#visualize test results
+rf_df %>%
+  ggplot(aes(x = carat)) +
+  geom_point(aes(y = price), color = "blue", alpha = 0.5 ) +
+  geom_point(aes(y = pred), color = "red", alpha = 0.5) +
+  scale_x_continuous(trans = cubrttrans(), limits = c(0.2, 3),
+                     breaks = c(0.2, 0.5, 1, 2, 3)) + 
+  scale_y_continuous(trans = scales::log10_trans(), limits = c(350, 15000),
+                     breaks = c(350, 1000, 5000, 10000, 15000)) +
+  scale_color_manual(labels = c("Price", "Pred"), values = c("blue", "red"))
+
+```
+
+
+The test evaluation of the model produces a similar error rate as in the train set. We can verify that the generalization capabilities of the model are competitive to predict over unseen data. Despite this rates are high, they are sufficient to produce (relatively) reliable outputs. It will require high computational power, and other fine tuning techniques to increase the performance and reduce the error of the model. The parameters of the model used here are still in the medium range according to the literature, but the computational requirements start to be a major limitation for increasing the performance.
+
+## The final evaluation
+
+We will value the diamonds with the model obtained with random forest.
+
+```{r}
+#impute price in missing_diamonds to being able to evaluate the model
+missing_diamonds$price <- as.numeric(rep(mean(diamonds$price), 10))
+diamonds <- rbind(diamonds, missing_diamonds)
+
+
+estimate = predict(rf, newdata = diamonds[53931:53940,])
+```
+
+We can expect the missing diamonds to be valued at:
+```{r}
+missing_diamonds$price <- estimate
+missing_diamonds
+```
+
+
+
+
+## Comments and future work
+
+It is necessary to make adjustments on the model, i.e. parameter tuning, to increase the performance, but it was not performed in this analysis due to computational limitations.
+
